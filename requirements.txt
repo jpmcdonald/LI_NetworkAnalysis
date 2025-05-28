@@ -1,0 +1,21 @@
+# Database
+SQLAlchemy==2.0.23
+psycopg2-binary==2.9.9
+python-dotenv==1.0.0
+
+# Data Processing
+pandas>=2.0.0
+numpy==1.24.3
+
+# Testing
+pytest==7.4.3
+pytest-cov==4.1.0
+
+# Logging
+python-json-logger==2.0.7
+
+# Development
+black>=24.2.0
+flake8>=7.0.0
+flake8-docstrings>=1.7.0
+pre-commit>=3.6.0 

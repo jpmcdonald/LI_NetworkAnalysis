@@ -6,6 +6,7 @@ from sqlalchemy.dialects.postgresql import insert
 from datetime import datetime, UTC
 import logging
 from dotenv import load_dotenv
+import argparse
 
 # Load environment variables from .env file
 load_dotenv()
@@ -60,6 +61,7 @@ class Connection(Base):
     notes = Column(Text)
     created_at = Column(TIMESTAMP)
     updated_at = Column(TIMESTAMP)
+    deleted_at = Column(TIMESTAMP)
     __table_args__ = (UniqueConstraint('url', name='uix_url'),)
 
 # Create engine and session
@@ -72,41 +74,9 @@ def parse_date(date_str):
     except Exception:
         return None
 
-def main():
+def ingest_connections(df, batch_size=1000, skip_rows=3):
+    """Ingest new connections into the database."""
     batch_time = datetime.now(UTC)
-    logging.info(f'Starting Connections ingestion at {batch_time}')
-    
-    try:
-        df = pd.read_csv('data/Connections.csv', encoding='utf-8', skiprows=3)
-        logging.info(f'Successfully read CSV file with {len(df)} rows')
-    except Exception as e:
-        logging.error(f'Error reading CSV: {e}')
-        return
-
-    # Rename columns to match DB
-    df = df.rename(columns={
-        'First Name': 'first_name',
-        'Last Name': 'last_name',
-        'URL': 'url',
-        'Email Address': 'email_address',
-        'Company': 'company',
-        'Position': 'position',
-        'Connected On': 'connected_on',
-    })
-    logging.info('Columns renamed to match database schema')
-
-    # Parse dates
-    df['connected_on'] = df['connected_on'].apply(parse_date)
-    df['cdc_datetime'] = batch_time
-    logging.info('Dates parsed and CDC timestamp added')
-
-    # Fill missing columns if any
-    for col in ['notes']:
-        if col not in df.columns:
-            df[col] = None
-
-    # Process in batches
-    batch_size = 1000
     total_inserted = 0
     total_skipped = 0
     total_rows = len(df)
@@ -114,7 +84,6 @@ def main():
     for batch_start in range(0, total_rows, batch_size):
         batch_end = min(batch_start + batch_size, total_rows)
         batch = df.iloc[batch_start:batch_end]
-        batch_time = datetime.now(UTC)
         
         logging.info(f'Processing batch {batch_start//batch_size + 1} of {(total_rows + batch_size - 1)//batch_size} (rows {batch_start+1}-{batch_end})')
         
@@ -158,6 +127,56 @@ def main():
             session.rollback()
         finally:
             session.close()
+    
+    return total_inserted, total_skipped, total_rows
+
+def main():
+    parser = argparse.ArgumentParser(description='Ingest LinkedIn connections into database')
+    parser.add_argument('--input-file', default='data/Connections.csv',
+                      help='Path to input CSV file (default: data/Connections.csv)')
+    parser.add_argument('--batch-size', type=int, default=1000,
+                      help='Number of records to process in each batch (default: 1000)')
+    parser.add_argument('--skip-rows', type=int, default=3,
+                      help='Number of rows to skip in CSV file (default: 3)')
+    parser.add_argument('--encoding', default='utf-8',
+                      help='CSV file encoding (default: utf-8)')
+    
+    args = parser.parse_args()
+    
+    batch_time = datetime.now(UTC)
+    logging.info(f'Starting Connections ingestion at {batch_time}')
+    
+    try:
+        df = pd.read_csv(args.input_file, encoding=args.encoding, skiprows=args.skip_rows)
+        logging.info(f'Successfully read CSV file with {len(df)} rows')
+    except Exception as e:
+        logging.error(f'Error reading CSV: {e}')
+        return
+
+    # Rename columns to match DB
+    df = df.rename(columns={
+        'First Name': 'first_name',
+        'Last Name': 'last_name',
+        'URL': 'url',
+        'Email Address': 'email_address',
+        'Company': 'company',
+        'Position': 'position',
+        'Connected On': 'connected_on',
+    })
+    logging.info('Columns renamed to match database schema')
+
+    # Parse dates
+    df['connected_on'] = df['connected_on'].apply(parse_date)
+    df['cdc_datetime'] = batch_time
+    logging.info('Dates parsed and CDC timestamp added')
+
+    # Fill missing columns if any
+    for col in ['notes']:
+        if col not in df.columns:
+            df[col] = None
+
+    # Process in batches
+    total_inserted, total_skipped, total_rows = ingest_connections(df, args.batch_size, args.skip_rows)
     
     # Log final summary
     end_time = datetime.now(UTC)

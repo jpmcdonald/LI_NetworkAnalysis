@@ -14,7 +14,8 @@ CREATE TABLE IF NOT EXISTS connections (
     cdc_datetime TIMESTAMP NOT NULL, -- CDC batch load timestamp
     notes TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP -- Soft delete timestamp
 );
 
 -- Create index on commonly searched fields
@@ -22,6 +23,7 @@ CREATE INDEX IF NOT EXISTS idx_connections_company ON connections(company);
 CREATE INDEX IF NOT EXISTS idx_connections_position ON connections(position);
 CREATE INDEX IF NOT EXISTS idx_connections_connected_on ON connections(connected_on);
 CREATE INDEX IF NOT EXISTS idx_connections_email_address ON connections(email_address);
+CREATE INDEX IF NOT EXISTS idx_connections_deleted_at ON connections(deleted_at);
 
 -- Create function to update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_updated_at_column()

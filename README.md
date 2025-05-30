@@ -185,3 +185,6 @@ LIMIT 20;
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details. 
+=======
+# LI_NetworkAnalysis
+Analysis of your LinkedIn Profile data 

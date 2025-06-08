@@ -63,7 +63,11 @@ CREATE TABLE IF NOT EXISTS posts (
 CREATE TABLE IF NOT EXISTS likes (
     id SERIAL PRIMARY KEY,
     date TIMESTAMP,
+    type VARCHAR(50),
     link VARCHAR(300),
+    year INTEGER,
+    month INTEGER,
+    year_month VARCHAR(7),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     deleted_at TIMESTAMP
@@ -95,6 +99,10 @@ CREATE INDEX IF NOT EXISTS idx_posts_deleted_at ON posts(deleted_at);
 -- Create indexes for likes table
 CREATE INDEX IF NOT EXISTS idx_likes_date ON likes(date);
 CREATE INDEX IF NOT EXISTS idx_likes_link ON likes(link);
+CREATE INDEX IF NOT EXISTS idx_likes_type ON likes(type);
+CREATE INDEX IF NOT EXISTS idx_likes_year ON likes(year);
+CREATE INDEX IF NOT EXISTS idx_likes_month ON likes(month);
+CREATE INDEX IF NOT EXISTS idx_likes_year_month ON likes(year_month);
 CREATE INDEX IF NOT EXISTS idx_likes_deleted_at ON likes(deleted_at);
 
 -- Create function to update updated_at timestamp

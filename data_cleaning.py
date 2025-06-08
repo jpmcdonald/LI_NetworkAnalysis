@@ -188,20 +188,39 @@ class DataCleaner:
         logger.info("Starting likes cleaning")
         try:
             df_clean = df.copy()
+            logger.info(f"Original dataset shape: {df_clean.shape}")
+            initial_rows = len(df_clean)
             
-            # Convert date column
+            # Convert date column to datetime
             self.safe_to_datetime(df_clean, 'Date')
+            
+            # Filter only 'LIKE' type reactions
+            df_clean = df_clean[df_clean["Type"] == "LIKE"]
+            logger.info(f"Filtered to only LIKE reactions. Remaining rows: {len(df_clean)}")
+            
+            # Add year and month columns for analysis
+            df_clean["Year"] = df_clean["Date"].dt.year
+            df_clean["Month"] = df_clean["Date"].dt.month
+            df_clean["Year-Month"] = df_clean["Date"].dt.to_period("M")
             
             # Remove duplicates
             df_clean = df_clean.drop_duplicates()
             
+            # Clean the Link column
+            if 'Link' in df_clean.columns:
+                df_clean['Link'] = df_clean['Link'].fillna('')
+                df_clean['Link'] = df_clean['Link'].astype(str).str.strip()
+            
             self.cleaning_stats['likes'] = {
-                'original_rows': len(df),
+                'original_rows': initial_rows,
                 'cleaned_rows': len(df_clean),
-                'removed_rows': len(df) - len(df_clean)
+                'removed_rows': initial_rows - len(df_clean),
+                'like_type_count': len(df_clean[df_clean["Type"] == "LIKE"]),
+                'years_covered': sorted(df_clean["Year"].unique().tolist())
             }
             
-            logger.info(f"Likes cleaning completed. Removed {len(df) - len(df_clean)} rows")
+            logger.info(f"Likes cleaning completed. Removed {initial_rows - len(df_clean)} rows")
+            logger.info(f"Years covered in the dataset: {sorted(df_clean['Year'].unique().tolist())}")
             return df_clean
             
         except Exception as e:
@@ -305,6 +324,20 @@ def main():
             cleaner.clean_connections(df_connections, connections_file)
         else:
             logger.warning(f"Connections file not found: {connections_file}")
+        
+        # Process reactions
+        reactions_file = 'data/Reactions.csv'
+        if os.path.exists(reactions_file):
+            logger.info(f"Processing reactions file: {reactions_file}")
+            df_reactions = pd.read_csv(reactions_file)
+            df_cleaned_reactions = cleaner.clean_likes(df_reactions)
+            # Save cleaned reactions
+            cleaned_reactions_file = reactions_file.replace('.csv', '_cleaned.csv')
+            df_cleaned_reactions.to_csv(cleaned_reactions_file, index=False)
+            cleaner.cleaned_files.add(cleaned_reactions_file)
+            logger.info(f"Cleaned reactions saved to {cleaned_reactions_file}")
+        else:
+            logger.warning(f"Reactions file not found: {reactions_file}")
         
         logger.info("Data cleaning completed successfully")
         

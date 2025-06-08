@@ -16,7 +16,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[
-        logging.FileHandler('linkedin_ingestion.log', encoding='utf-8')
+        logging.FileHandler('data_ingestion.log', encoding='utf-8')
     ]
 )
 
@@ -70,6 +70,19 @@ class Message(Base):
     message_date = Column(TIMESTAMP)
     subject = Column(Text)
     content = Column(Text)
+    created_at = Column(TIMESTAMP)
+    updated_at = Column(TIMESTAMP)
+    deleted_at = Column(TIMESTAMP)
+
+class Like(Base):
+    __tablename__ = 'likes'
+    id = Column(Integer, primary_key=True)
+    date = Column(TIMESTAMP)
+    type = Column(String(50))
+    link = Column(String(300))
+    year = Column(Integer)
+    month = Column(Integer)
+    year_month = Column(String(7))
     created_at = Column(TIMESTAMP)
     updated_at = Column(TIMESTAMP)
     deleted_at = Column(TIMESTAMP)
@@ -148,6 +161,29 @@ def ingest_data(df, model_class, batch_size=1000, skip_rows=0, is_update=False):
                             new_records.append(f"Message from {sender} to {len(recipient.split(','))} recipients")
                         except Exception as e:
                             logging.error(f'Error creating message object: {e}')
+                            logging.error(f'Data that caused error: {data}')
+                            session.rollback()
+                            skipped += 1
+                            continue
+                    elif model_class == Like:
+                        try:
+                            # Create a new Like object with the transformed data
+                            like = Like(
+                                date=data['date'],
+                                type=str(data['type']),
+                                link=str(data['link']),
+                                year=int(data['year']),
+                                month=int(data['month']),
+                                year_month=str(data['year_month']),
+                                created_at=data['created_at'],
+                                updated_at=data['updated_at']
+                            )
+                            session.add(like)
+                            session.flush()
+                            inserted += 1
+                            new_records.append(f"Like on {data['date']} for {data['link']}")
+                        except Exception as e:
+                            logging.error(f'Error creating like object: {e}')
                             logging.error(f'Data that caused error: {data}')
                             session.rollback()
                             skipped += 1
@@ -234,6 +270,52 @@ def process_dataset(file_path, model_class, column_mapping, date_columns=None, s
             logging.info(df.dtypes)
             
             logging.info('Messages data cleaned and transformed')
+        elif model_class == Like:
+            # Log the first few rows of raw data for debugging
+            logging.info("First few rows of raw likes data:")
+            logging.info(df.head())
+            
+            # Clean and transform the data
+            # Check if we're using the cleaned file (which already has the correct column names)
+            if 'date' in df.columns:
+                # Data is already cleaned, just ensure types are correct
+                df['date'] = pd.to_datetime(df['date'], errors='coerce')
+            else:
+                # Original file format, transform the data
+                df['date'] = pd.to_datetime(df['Date'], errors='coerce')
+                df['type'] = df['Type'].fillna('')
+                df['link'] = df['Link'].fillna('')
+            
+            # Add temporal columns if they don't exist
+            if 'year' not in df.columns:
+                df['year'] = df['date'].dt.year
+            if 'month' not in df.columns:
+                df['month'] = df['date'].dt.month
+            if 'year_month' not in df.columns:
+                df['year_month'] = df['date'].dt.strftime('%Y-%m')
+            
+            # Ensure we have all required columns
+            columns_to_keep = ['date', 'type', 'link', 'year', 'month', 'year_month']
+            df = df[columns_to_keep]
+            
+            # Convert all columns to the correct types
+            df['date'] = pd.to_datetime(df['date'])
+            df['type'] = df['type'].astype(str)
+            df['link'] = df['link'].astype(str)
+            df['year'] = df['year'].astype(int)
+            df['month'] = df['month'].astype(int)
+            df['year_month'] = df['year_month'].astype(str)
+            
+            # Verify no null values in required fields
+            null_counts = df.isnull().sum()
+            logging.info("Null value counts in transformed data:")
+            logging.info(null_counts)
+            
+            # Validate data types
+            logging.info("Data types after transformation:")
+            logging.info(df.dtypes)
+            
+            logging.info('Likes data cleaned and transformed')
         else:
             # For connections, use the original column mapping
             df = df.rename(columns=column_mapping)
@@ -293,6 +375,13 @@ def main():
             'model': Message,
             'column_mapping': {},
             'date_columns': ['message_date'],
+            'skip_rows': 0
+        },
+        'likes': {
+            'file': 'Reactions_cleaned.csv',
+            'model': Like,
+            'column_mapping': {},
+            'date_columns': ['date'],
             'skip_rows': 0
         }
     }

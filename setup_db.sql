@@ -4,6 +4,7 @@ DROP TABLE IF EXISTS messages;
 DROP TABLE IF EXISTS comments;
 DROP TABLE IF EXISTS posts;
 DROP TABLE IF EXISTS likes;
+DROP TABLE IF EXISTS shares;
 
 -- Create connections table
 CREATE TABLE IF NOT EXISTS connections (
@@ -54,9 +55,12 @@ CREATE TABLE IF NOT EXISTS comments (
 CREATE TABLE IF NOT EXISTS posts (
     id SERIAL PRIMARY KEY,
     date TIMESTAMP,
-    link VARCHAR(300),
-    content TEXT,
-    title TEXT,
+    post_link VARCHAR(300),
+    post_commentary TEXT,
+    visibility VARCHAR(50),
+    year INTEGER,
+    month INTEGER,
+    year_month VARCHAR(7),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     deleted_at TIMESTAMP
@@ -75,6 +79,7 @@ CREATE TABLE IF NOT EXISTS likes (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     deleted_at TIMESTAMP
 );
+
 
 -- Create indexes for connections table
 CREATE INDEX IF NOT EXISTS idx_connections_company ON connections(company);
@@ -96,7 +101,11 @@ CREATE INDEX IF NOT EXISTS idx_comments_deleted_at ON comments(deleted_at);
 
 -- Create indexes for posts table
 CREATE INDEX IF NOT EXISTS idx_posts_date ON posts(date);
-CREATE INDEX IF NOT EXISTS idx_posts_link ON posts(link);
+CREATE INDEX IF NOT EXISTS idx_posts_post_link ON posts(post_link);
+CREATE INDEX IF NOT EXISTS idx_posts_visibility ON posts(visibility);
+CREATE INDEX IF NOT EXISTS idx_posts_year ON posts(year);
+CREATE INDEX IF NOT EXISTS idx_posts_month ON posts(month);
+CREATE INDEX IF NOT EXISTS idx_posts_year_month ON posts(year_month);
 CREATE INDEX IF NOT EXISTS idx_posts_deleted_at ON posts(deleted_at);
 
 -- Create indexes for likes table
@@ -107,6 +116,15 @@ CREATE INDEX IF NOT EXISTS idx_likes_year ON likes(year);
 CREATE INDEX IF NOT EXISTS idx_likes_month ON likes(month);
 CREATE INDEX IF NOT EXISTS idx_likes_year_month ON likes(year_month);
 CREATE INDEX IF NOT EXISTS idx_likes_deleted_at ON likes(deleted_at);
+
+-- Create indexes for shares table
+CREATE INDEX IF NOT EXISTS idx_shares_date ON shares(date);
+CREATE INDEX IF NOT EXISTS idx_shares_share_link ON shares(share_link);
+CREATE INDEX IF NOT EXISTS idx_shares_visibility ON shares(visibility);
+CREATE INDEX IF NOT EXISTS idx_shares_year ON shares(year);
+CREATE INDEX IF NOT EXISTS idx_shares_month ON shares(month);
+CREATE INDEX IF NOT EXISTS idx_shares_year_month ON shares(year_month);
+CREATE INDEX IF NOT EXISTS idx_shares_deleted_at ON shares(deleted_at);
 
 -- Create function to update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -140,5 +158,10 @@ CREATE TRIGGER update_posts_updated_at
 
 CREATE TRIGGER update_likes_updated_at
     BEFORE UPDATE ON likes
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_shares_updated_at
+    BEFORE UPDATE ON shares
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column(); 

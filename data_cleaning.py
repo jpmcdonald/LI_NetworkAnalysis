@@ -181,36 +181,63 @@ class DataCleaner:
             logger.error(f"Error cleaning comments: {str(e)}")
             raise
 
-    def clean_posts(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Clean posts dataset."""
-        logger.info("Starting posts cleaning")
-        try:
-            df_clean = df.copy()
-            
-            # Convert date column
-            self.safe_to_datetime(df_clean, 'Date')
-            
-            # Clean text fields
-            text_columns = ['Content', 'Title']
-            for col in text_columns:
-                if col in df_clean.columns:
-                    df_clean[col] = df_clean[col].fillna('')
-            
-            # Remove duplicates
-            df_clean = df_clean.drop_duplicates()
-            
-            self.cleaning_stats['posts'] = {
-                'original_rows': len(df),
-                'cleaned_rows': len(df_clean),
-                'removed_rows': len(df) - len(df_clean)
-            }
-            
-            logger.info(f"Posts cleaning completed. Removed {len(df) - len(df_clean)} rows")
-            return df_clean
-            
-        except Exception as e:
-            logger.error(f"Error cleaning posts: {str(e)}")
-            raise
+    def clean_posts(self, df, file_path):
+        """Clean posts data from Shares.csv"""
+        logging.info("Starting posts cleaning from Shares data...")
+        logging.info(f"Original dataset shape: {df.shape}")
+        
+        # Create a copy to avoid SettingWithCopyWarning
+        df_clean = df.copy()
+        
+        # Drop columns with many missing values
+        df_clean = df_clean.drop(columns=["SharedUrl", "MediaUrl"])
+        logging.info("Dropped SharedUrl and MediaUrl columns due to high missing values")
+        
+        # Convert date to datetime
+        df_clean['date'] = pd.to_datetime(df_clean['Date'], errors='coerce')
+        logging.info("Date column converted to datetime")
+        
+        # Drop rows with missing values in required fields
+        df_clean = df_clean.dropna(subset=['Date', 'ShareLink', 'ShareCommentary', 'Visibility'])
+        logging.info(f"Rows dropped due to missing values: {df.shape[0] - df_clean.shape[0]}")
+        
+        # Extract year, month, and year-month
+        df_clean['year'] = df_clean['date'].dt.year
+        df_clean['month'] = df_clean['date'].dt.month
+        df_clean['year_month'] = df_clean['date'].dt.strftime('%Y-%m')
+        logging.info("Extracted year, month, and year-month from date")
+        
+        # Clean text fields - map from Shares.csv columns to posts columns
+        df_clean.loc[:, 'post_commentary'] = df_clean['ShareCommentary'].fillna('')
+        df_clean.loc[:, 'post_link'] = df_clean['ShareLink'].fillna('')
+        df_clean.loc[:, 'visibility'] = df_clean['Visibility'].fillna('')
+        logging.info("Cleaned text fields")
+        
+        # Remove duplicates
+        df_clean = df_clean.drop_duplicates()
+        logging.info(f"Removed {df.shape[0] - df_clean.shape[0]} duplicate rows")
+        
+        # Keep only required columns
+        df_clean = df_clean[['date', 'post_link', 'post_commentary', 'visibility', 'year', 'month', 'year_month']]
+        
+        # Save cleaned data
+        output_file = file_path.replace('Shares.csv', 'Posts_cleaned.csv')
+        df_clean.to_csv(output_file, index=False)
+        logging.info(f"Cleaned posts data saved to {output_file}")
+        
+        # Record cleaning stats
+        self.cleaning_stats['posts'] = {
+            'original_rows': df.shape[0],
+            'rows_after_cleaning': df_clean.shape[0],
+            'missing_values_dropped': df.shape[0] - df_clean.shape[0],
+            'duplicates_removed': df.shape[0] - df_clean.shape[0]
+        }
+        
+        # Save cleaning status
+        self.save_cleaning_status('posts', output_file)
+        
+        logging.info(f"Posts cleaning completed. Final shape: {df_clean.shape}")
+        return df_clean
 
     def clean_likes(self, df: pd.DataFrame) -> pd.DataFrame:
         """Clean likes dataset."""
@@ -376,6 +403,15 @@ def main():
             cleaner.clean_comments(df_comments, comments_file)
         else:
             logger.warning(f"Comments file not found: {comments_file}")
+        
+        # Process shares/posts
+        shares_file = 'data/Shares.csv'
+        if os.path.exists(shares_file):
+            logger.info(f"Processing shares file: {shares_file}")
+            df_shares = pd.read_csv(shares_file)
+            cleaner.clean_posts(df_shares, shares_file)
+        else:
+            logger.warning(f"Shares file not found: {shares_file}")
         
         # Process reactions
         reactions_file = 'data/Reactions.csv'

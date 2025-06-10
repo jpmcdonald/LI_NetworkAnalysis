@@ -7,15 +7,17 @@ from datetime import datetime, UTC
 import logging
 from dotenv import load_dotenv
 import argparse
+from data_cleaning import DataCleaner
 
 # Load environment variables from .env file
 load_dotenv()
 
-# Setup logging: log only to file with UTF-8 encoding (no console handler)
+# Setup logging: log to both console and file with UTF-8 encoding
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[
+        logging.StreamHandler(),  # Add console handler
         logging.FileHandler('data_ingestion.log', encoding='utf-8')
     ]
 )
@@ -80,6 +82,19 @@ class Like(Base):
     date = Column(TIMESTAMP)
     type = Column(String(50))
     link = Column(String(300))
+    year = Column(Integer)
+    month = Column(Integer)
+    year_month = Column(String(7))
+    created_at = Column(TIMESTAMP)
+    updated_at = Column(TIMESTAMP)
+    deleted_at = Column(TIMESTAMP)
+
+class Comment(Base):
+    __tablename__ = 'comments'
+    id = Column(Integer, primary_key=True)
+    date = Column(TIMESTAMP)
+    link = Column(String(300))
+    message = Column(Text)
     year = Column(Integer)
     month = Column(Integer)
     year_month = Column(String(7))
@@ -188,6 +203,28 @@ def ingest_data(df, model_class, batch_size=1000, skip_rows=0, is_update=False):
                             session.rollback()
                             skipped += 1
                             continue
+                    elif model_class == Comment:
+                        try:
+                            comment = Comment(
+                                date=data['date'],
+                                link=str(data['link']),
+                                message=str(data['message']),
+                                year=int(data['year']),
+                                month=int(data['month']),
+                                year_month=str(data['year_month']),
+                                created_at=data['created_at'],
+                                updated_at=data['updated_at']
+                            )
+                            session.add(comment)
+                            session.flush()
+                            inserted += 1
+                            new_records.append(f"Comment on {data['date']} for {data['link']}")
+                        except Exception as e:
+                            logging.error(f'Error creating comment object: {e}')
+                            logging.error(f'Data that caused error: {data}')
+                            session.rollback()
+                            skipped += 1
+                            continue
                     else:
                         stmt = insert(model_class).values(**data)
                         if model_class == Connection:
@@ -248,28 +285,11 @@ def process_dataset(file_path, model_class, column_mapping, date_columns=None, s
             
             # Validate data before transformation
             logging.info("Data validation before transformation:")
-            logging.info(f"Null values in FROM: {df['FROM'].isnull().sum()}")
-            logging.info(f"Null values in TO: {df['TO'].isnull().sum()}")
-            logging.info(f"Null values in CONTENT: {df['CONTENT'].isnull().sum()}")
             
-            # Log the transformed data for debugging
-            logging.info("First few rows of transformed message data:")
-            logging.info(df[['conversation_id', 'sender', 'recipient', 'message_date', 'subject', 'content']].head())
-            
-            # Drop any extra columns we don't need
-            columns_to_keep = ['conversation_id', 'sender', 'recipient', 'message_date', 'subject', 'content']
-            df = df[columns_to_keep]
-            
-            # Verify no null values in required fields
-            null_counts = df.isnull().sum()
-            logging.info("Null value counts in transformed data:")
-            logging.info(null_counts)
-            
-            # Validate data types
-            logging.info("Data types after transformation:")
-            logging.info(df.dtypes)
-            
-            logging.info('Messages data cleaned and transformed')
+            # Apply cleaning specific to messages
+            cleaner = DataCleaner()
+            df = cleaner.clean_messages(df, file_path)
+
         elif model_class == Like:
             # Log the first few rows of raw data for debugging
             logging.info("First few rows of raw likes data:")
@@ -316,10 +336,56 @@ def process_dataset(file_path, model_class, column_mapping, date_columns=None, s
             logging.info(df.dtypes)
             
             logging.info('Likes data cleaned and transformed')
-        else:
-            # For connections, use the original column mapping
-            df = df.rename(columns=column_mapping)
-            logging.info('Columns renamed to match database schema')
+        elif model_class == Comment:
+            logging.info("Starting comments processing...")
+            logging.info("First few rows of raw comments data:")
+            logging.info(df.head())
+            
+            # Clean and transform the data
+            # Check if we're using the cleaned file (which already has the correct column names)
+            if 'date' in df.columns:
+                # Data is already cleaned, just ensure types are correct
+                df['date'] = pd.to_datetime(df['date'], errors='coerce')
+            else:
+                # Original file format, transform the data
+                df['date'] = pd.to_datetime(df['Date'], errors='coerce')
+                df['link'] = df['Link'].fillna('')
+                df['message'] = df['Message'].fillna('')
+            
+            # Add temporal columns if they don't exist
+            if 'year' not in df.columns:
+                df['year'] = df['date'].dt.year
+            if 'month' not in df.columns:
+                df['month'] = df['date'].dt.month
+            if 'year_month' not in df.columns:
+                df['year_month'] = df['date'].dt.strftime('%Y-%m')
+            
+            # Ensure we have all required columns with correct names
+            columns_to_keep = ['date', 'link', 'message', 'year', 'month', 'year_month']
+            df = df[columns_to_keep]
+            
+            # Convert all columns to the correct types
+            df['date'] = pd.to_datetime(df['date'])
+            df['link'] = df['link'].astype(str)
+            df['message'] = df['message'].astype(str)
+            df['year'] = df['year'].astype(int)
+            df['month'] = df['month'].astype(int)
+            df['year_month'] = df['year_month'].astype(str)
+            
+            # Verify no null values in required fields
+            null_counts = df.isnull().sum()
+            logging.info("Null value counts in transformed data:")
+            logging.info(null_counts)
+            
+            # Validate data types
+            logging.info("Data types after transformation:")
+            logging.info(df.dtypes)
+            
+            logging.info('Comments data cleaned and transformed')
+
+        # Rename columns to match database schema
+        df = df.rename(columns=column_mapping)
+        logging.info('Columns renamed to match database schema')
         
         # Parse dates
         if date_columns:
@@ -380,6 +446,13 @@ def main():
         'likes': {
             'file': 'Reactions_cleaned.csv',
             'model': Like,
+            'column_mapping': {},
+            'date_columns': ['date'],
+            'skip_rows': 0
+        },
+        'comments': {
+            'file': 'Comments_cleaned.csv',
+            'model': Comment,
             'column_mapping': {},
             'date_columns': ['date'],
             'skip_rows': 0

@@ -42,6 +42,9 @@ CREATE TABLE IF NOT EXISTS comments (
     date TIMESTAMP,
     link VARCHAR(300),
     message TEXT,
+    year INTEGER,
+    month INTEGER,
+    year_month VARCHAR(7),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     deleted_at TIMESTAMP

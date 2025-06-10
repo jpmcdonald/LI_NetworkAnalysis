@@ -6,6 +6,8 @@ from datetime import datetime
 import re
 import json
 import os
+import matplotlib.pyplot as plt
+import csv
 
 # Set up logging with more detailed format
 logging.basicConfig(
@@ -123,29 +125,56 @@ class DataCleaner:
             logger.error(f"Error cleaning messages: {str(e)}")
             raise
 
-    def clean_comments(self, df: pd.DataFrame) -> pd.DataFrame:
+    def clean_comments(self, df: pd.DataFrame, file_path: str) -> pd.DataFrame:
         """Clean comments dataset."""
         logger.info("Starting comments cleaning")
         try:
             df_clean = df.copy()
+            logger.info(f"Original dataset shape: {df_clean.shape}")
+            initial_rows = len(df_clean)
             
             # Convert date column
             self.safe_to_datetime(df_clean, 'Date')
+            logger.info("Date column converted to datetime")
             
+            # Drop rows with missing values in 'Date', 'Message', or 'Link'
+            df_clean.dropna(subset=["Date", "Message", "Link"], inplace=True)
+            rows_after_dropping_na = len(df_clean)
+            logger.info(f"Dropped {initial_rows - rows_after_dropping_na} rows with missing 'Date', 'Message', or 'Link'.")
+            
+            # Extract year, month, and year-month for trend analysis
+            df_clean["Year"] = df_clean["Date"].dt.year
+            df_clean["Month"] = df_clean["Date"].dt.month
+            df_clean["Year-Month"] = df_clean["Date"].dt.to_period("M")
+            logger.info("Extracted year, month, and year-month from date")
+
             # Clean text fields
             if 'Message' in df_clean.columns:
                 df_clean['Message'] = df_clean['Message'].fillna('')
+                logger.info("Cleaned Message field")
             
             # Remove duplicates
             df_clean = df_clean.drop_duplicates()
+            duplicates_removed = initial_rows - len(df_clean)
+            logger.info(f"Removed {duplicates_removed} duplicate rows")
             
+            # Log cleaning statistics
             self.cleaning_stats['comments'] = {
                 'original_rows': len(df),
                 'cleaned_rows': len(df_clean),
                 'removed_rows': len(df) - len(df_clean)
             }
             
-            logger.info(f"Comments cleaning completed. Removed {len(df) - len(df_clean)} rows")
+            # Save cleaned data
+            cleaned_file_path = file_path.replace('.csv', '_cleaned.csv')
+            df_clean.to_csv(cleaned_file_path, index=False)
+            self.cleaned_files.add(cleaned_file_path)
+            logger.info(f"Cleaned data saved to {cleaned_file_path}")
+
+            # Save cleaning status
+            self.save_cleaning_status('comments', cleaned_file_path)
+            
+            logger.info(f"Comments cleaning completed. Final shape: {df_clean.shape}")
             return df_clean
             
         except Exception as e:
@@ -324,6 +353,29 @@ def main():
             cleaner.clean_connections(df_connections, connections_file)
         else:
             logger.warning(f"Connections file not found: {connections_file}")
+        
+        # Process comments
+        comments_file = 'data/Comments.csv'
+        if os.path.exists(comments_file):
+            logger.info(f"Processing comments file: {comments_file}")
+            # Read Comments.csv using csv module for more robust parsing
+            rows = []
+            with open(comments_file, 'r', encoding='utf-8') as f:
+                reader = csv.reader(f)
+                header = next(reader)  # Get header row
+                for row in reader:
+                    if len(row) > 3:  # If we have more than 3 fields, combine the extra ones into the message
+                        date, link = row[0], row[1]
+                        message = ','.join(row[2:])  # Combine all remaining fields into the message
+                        rows.append([date, link, message])
+                    else:
+                        rows.append(row)
+            
+            # Convert to DataFrame
+            df_comments = pd.DataFrame(rows, columns=header)
+            cleaner.clean_comments(df_comments, comments_file)
+        else:
+            logger.warning(f"Comments file not found: {comments_file}")
         
         # Process reactions
         reactions_file = 'data/Reactions.csv'

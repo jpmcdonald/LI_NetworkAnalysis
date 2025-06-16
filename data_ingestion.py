@@ -8,6 +8,8 @@ import logging
 from dotenv import load_dotenv
 import argparse
 from data_cleaning import DataCleaner
+import time
+from datetime import timezone
 
 # Load environment variables from .env file
 load_dotenv()
@@ -66,7 +68,7 @@ class Connection(Base):
 class Message(Base):
     __tablename__ = 'messages'
     id = Column(Integer, primary_key=True)
-    conversation_id = Column(String(100))
+    message_id = Column(String(100), unique=True)
     sender = Column(String(200))
     recipient = Column(Text)
     message_date = Column(TIMESTAMP)
@@ -75,25 +77,27 @@ class Message(Base):
     created_at = Column(TIMESTAMP)
     updated_at = Column(TIMESTAMP)
     deleted_at = Column(TIMESTAMP)
+    __table_args__ = (UniqueConstraint('message_id', name='uix_message_id'),)
 
 class Like(Base):
     __tablename__ = 'likes'
     id = Column(Integer, primary_key=True)
     date = Column(TIMESTAMP)
     type = Column(String(50))
-    link = Column(String(300))
+    link = Column(String(300), unique=True)
     year = Column(Integer)
     month = Column(Integer)
     year_month = Column(String(7))
     created_at = Column(TIMESTAMP)
     updated_at = Column(TIMESTAMP)
     deleted_at = Column(TIMESTAMP)
+    __table_args__ = (UniqueConstraint('link', name='uix_like_link'),)
 
 class Comment(Base):
     __tablename__ = 'comments'
     id = Column(Integer, primary_key=True)
+    comment_id = Column(String(100), unique=True)
     date = Column(TIMESTAMP)
-    link = Column(String(300))
     message = Column(Text)
     year = Column(Integer)
     month = Column(Integer)
@@ -101,12 +105,13 @@ class Comment(Base):
     created_at = Column(TIMESTAMP)
     updated_at = Column(TIMESTAMP)
     deleted_at = Column(TIMESTAMP)
+    __table_args__ = (UniqueConstraint('comment_id', name='uix_comment_id'),)
 
 class Post(Base):
     __tablename__ = 'posts'
     id = Column(Integer, primary_key=True)
     date = Column(TIMESTAMP)
-    post_link = Column(String(300))
+    post_link = Column(String(300), unique=True)
     post_commentary = Column(Text)
     visibility = Column(String(50))
     year = Column(Integer)
@@ -115,6 +120,7 @@ class Post(Base):
     created_at = Column(TIMESTAMP)
     updated_at = Column(TIMESTAMP)
     deleted_at = Column(TIMESTAMP)
+    __table_args__ = (UniqueConstraint('post_link', name='uix_post_link'),)
 
 # Create engine and session
 engine = create_engine(DATABASE_URL)
@@ -146,6 +152,16 @@ def ingest_data(df, model_class, batch_size=1000, skip_rows=0, is_update=False):
     total_inserted = 0
     total_skipped = 0
     total_rows = len(df)
+
+    # Get the appropriate unique identifier field based on model type
+    unique_id_field = {
+        Connection: 'url',
+        Message: 'message_id',
+        Comment: 'comment_id',
+        Post: 'post_link',
+        Like: 'link'
+    }.get(model_class)
+
     for batch_start in range(0, total_rows, batch_size):
         batch_end = min(batch_start + batch_size, total_rows)
         batch = df.iloc[batch_start:batch_end]
@@ -168,14 +184,14 @@ def ingest_data(df, model_class, batch_size=1000, skip_rows=0, is_update=False):
                             logging.warning(f"Skipping message with missing sender/recipient: {data}")
                             skipped += 1
                             continue
-                        conversation_id = str(data['conversation_id']).strip()
+                        message_id = str(data['message_id']).strip()
                         sender = str(data['sender']).strip()
                         recipient = format_recipients(str(data['recipient']).strip())
                         subject = str(data['subject']).strip()
                         content = str(data['content']).strip()
                         try:
                             message = Message(
-                                conversation_id=conversation_id,
+                                message_id=message_id,
                                 sender=sender,
                                 recipient=recipient,
                                 message_date=data['message_date'],
@@ -220,8 +236,8 @@ def ingest_data(df, model_class, batch_size=1000, skip_rows=0, is_update=False):
                     elif model_class == Comment:
                         try:
                             comment = Comment(
+                                comment_id=str(data['comment_id']),
                                 date=data['date'],
-                                link=str(data['link']),
                                 message=str(data['message']),
                                 year=int(data['year']),
                                 month=int(data['month']),
@@ -232,7 +248,7 @@ def ingest_data(df, model_class, batch_size=1000, skip_rows=0, is_update=False):
                             session.add(comment)
                             session.flush()
                             inserted += 1
-                            new_records.append(f"Comment on {data['date']} for {data['link']}")
+                            new_records.append(f"Comment on {data['date']}")
                         except Exception as e:
                             logging.error(f'Error creating comment object: {e}')
                             logging.error(f'Data that caused error: {data}')
@@ -263,16 +279,16 @@ def ingest_data(df, model_class, batch_size=1000, skip_rows=0, is_update=False):
                             skipped += 1
                             continue
                     else:
+                        # For other models, use the insert statement with unique constraint handling
                         stmt = insert(model_class).values(**data)
-                        if model_class == Connection:
-                            stmt = stmt.on_conflict_do_nothing(index_elements=['url'])
+                        if unique_id_field:
+                            stmt = stmt.on_conflict_do_nothing(index_elements=[unique_id_field])
                         else:
                             stmt = stmt.on_conflict_do_nothing(index_elements=['id'])
                         result = session.execute(stmt)
-                        if result.rowcount:
+                        if result.rowcount > 0:
                             inserted += 1
-                            if model_class == Connection:
-                                new_records.append(f"{data['first_name']} {data['last_name']} ({data['company']})")
+                            new_records.append(f"{model_class.__name__} record")
                         else:
                             skipped += 1
                 except Exception as e:
@@ -298,205 +314,135 @@ def ingest_data(df, model_class, batch_size=1000, skip_rows=0, is_update=False):
 
 def process_dataset(file_path, model_class, column_mapping, date_columns=None, skip_rows=0, batch_size=1000):
     """Process a single dataset with its specific configuration."""
-    batch_time = datetime.now(UTC)
-    logging.info(f'Starting ingestion for {model_class.__tablename__} at {batch_time}')
+    batch_time = time.time()
+    total_records = 0
+    total_errors = 0
+    total_skipped = 0
+    
+    # Create a new session for this dataset
+    session = Session()
     
     try:
-        # Read CSV file
+        # Read the CSV file
         df = pd.read_csv(file_path, skiprows=skip_rows)
-        logging.info(f'Successfully read CSV file with {len(df)} rows')
+        logging.info(f"Processing {len(df)} records from {file_path}")
         
-        # For messages, we need to handle the data differently
-        if model_class == Message:
-            # Log the first few rows of raw data for debugging
-            logging.info("First few rows of raw message data:")
-            logging.info(df[['CONVERSATION ID', 'FROM', 'TO', 'DATE', 'SUBJECT', 'CONTENT']].head())
-            
-            # Clean and transform the data before renaming columns
-            df['message_date'] = pd.to_datetime(df['DATE'], errors='coerce')
-            df['sender'] = df['FROM'].fillna('')
-            df['recipient'] = df['TO'].fillna('')
-            df['subject'] = df['SUBJECT'].fillna('')
-            df['content'] = df['CONTENT'].fillna('')
-            df['conversation_id'] = df['CONVERSATION ID'].fillna('')
-            
-            # Validate data before transformation
-            logging.info("Data validation before transformation:")
-            
-            # Apply cleaning specific to messages
-            cleaner = DataCleaner()
-            df = cleaner.clean_messages(df, file_path)
-
-        elif model_class == Like:
-            # Log the first few rows of raw data for debugging
-            logging.info("First few rows of raw likes data:")
-            logging.info(df.head())
-            
-            # Clean and transform the data
-            # Check if we're using the cleaned file (which already has the correct column names)
-            if 'date' in df.columns:
-                # Data is already cleaned, just ensure types are correct
-                df['date'] = pd.to_datetime(df['date'], errors='coerce')
-            else:
-                # Original file format, transform the data
-                df['date'] = pd.to_datetime(df['Date'], errors='coerce')
-                df['type'] = df['Type'].fillna('')
-                df['link'] = df['Link'].fillna('')
-            
-            # Add temporal columns if they don't exist
-            if 'year' not in df.columns:
-                df['year'] = df['date'].dt.year
-            if 'month' not in df.columns:
-                df['month'] = df['date'].dt.month
-            if 'year_month' not in df.columns:
-                df['year_month'] = df['date'].dt.strftime('%Y-%m')
-            
-            # Ensure we have all required columns
-            columns_to_keep = ['date', 'type', 'link', 'year', 'month', 'year_month']
-            df = df[columns_to_keep]
-            
-            # Convert all columns to the correct types
-            df['date'] = pd.to_datetime(df['date'])
-            df['type'] = df['type'].astype(str)
-            df['link'] = df['link'].astype(str)
-            df['year'] = df['year'].astype(int)
-            df['month'] = df['month'].astype(int)
-            df['year_month'] = df['year_month'].astype(str)
-            
-            # Verify no null values in required fields
-            null_counts = df.isnull().sum()
-            logging.info("Null value counts in transformed data:")
-            logging.info(null_counts)
-            
-            # Validate data types
-            logging.info("Data types after transformation:")
-            logging.info(df.dtypes)
-            
-            logging.info('Likes data cleaned and transformed')
-        elif model_class == Comment:
-            logging.info("Starting comments processing...")
-            logging.info("First few rows of raw comments data:")
-            logging.info(df.head())
-            
-            # Clean and transform the data
-            # Check if we're using the cleaned file (which already has the correct column names)
-            if 'date' in df.columns:
-                # Data is already cleaned, just ensure types are correct
-                df['date'] = pd.to_datetime(df['date'], errors='coerce')
-            else:
-                # Original file format, transform the data
-                df['date'] = pd.to_datetime(df['Date'], errors='coerce')
-                df['link'] = df['Link'].fillna('')
-                df['message'] = df['Message'].fillna('')
-            
-            # Add temporal columns if they don't exist
-            if 'year' not in df.columns:
-                df['year'] = df['date'].dt.year
-            if 'month' not in df.columns:
-                df['month'] = df['date'].dt.month
-            if 'year_month' not in df.columns:
-                df['year_month'] = df['date'].dt.strftime('%Y-%m')
-            
-            # Ensure we have all required columns with correct names
-            columns_to_keep = ['date', 'link', 'message', 'year', 'month', 'year_month']
-            df = df[columns_to_keep]
-            
-            # Convert all columns to the correct types
-            df['date'] = pd.to_datetime(df['date'])
-            df['link'] = df['link'].astype(str)
-            df['message'] = df['message'].astype(str)
-            df['year'] = df['year'].astype(int)
-            df['month'] = df['month'].astype(int)
-            df['year_month'] = df['year_month'].astype(str)
-            
-            # Verify no null values in required fields
-            null_counts = df.isnull().sum()
-            logging.info("Null value counts in transformed data:")
-            logging.info(null_counts)
-            
-            # Validate data types
-            logging.info("Data types after transformation:")
-            logging.info(df.dtypes)
-            
-            logging.info('Comments data cleaned and transformed')
-        elif model_class == Post:
-            logging.info("Starting posts processing from Shares data...")
-            logging.info("First few rows of raw Shares data:")
-            logging.info(df.head())
-            
-            # Clean and transform the data
-            # Check if we're using the cleaned file (which already has the correct column names)
-            if 'date' in df.columns:
-                # Data is already cleaned, just ensure types are correct
-                df['date'] = pd.to_datetime(df['date'], errors='coerce')
-            else:
-                # Original file format, transform the data from Shares.csv columns
-                df['date'] = pd.to_datetime(df['Date'], errors='coerce')
-                df['post_link'] = df['ShareLink'].fillna('')
-                df['post_commentary'] = df['ShareCommentary'].fillna('')
-                df['visibility'] = df['Visibility'].fillna('')
-            
-            # Add temporal columns if they don't exist
-            if 'year' not in df.columns:
-                df['year'] = df['date'].dt.year
-            if 'month' not in df.columns:
-                df['month'] = df['date'].dt.month
-            if 'year_month' not in df.columns:
-                df['year_month'] = df['date'].dt.strftime('%Y-%m')
-            
-            # Ensure we have all required columns with correct names
-            columns_to_keep = ['date', 'post_link', 'post_commentary', 'visibility', 'year', 'month', 'year_month']
-            df = df[columns_to_keep]
-            
-            # Convert all columns to the correct types
-            df['date'] = pd.to_datetime(df['date'])
-            df['post_link'] = df['post_link'].astype(str)
-            df['post_commentary'] = df['post_commentary'].astype(str)
-            df['visibility'] = df['visibility'].astype(str)
-            df['year'] = df['year'].astype(int)
-            df['month'] = df['month'].astype(int)
-            df['year_month'] = df['year_month'].astype(str)
-            
-            # Verify no null values in required fields
-            null_counts = df.isnull().sum()
-            logging.info("Null value counts in transformed data:")
-            logging.info(null_counts)
-            
-            # Validate data types
-            logging.info("Data types after transformation:")
-            logging.info(df.dtypes)
-            
-            logging.info('Posts data cleaned and transformed from Shares data')
-
-        # Rename columns to match database schema
-        df = df.rename(columns=column_mapping)
-        logging.info('Columns renamed to match database schema')
+        # Apply column mapping if provided
+        if column_mapping:
+            df = df.rename(columns=column_mapping)
         
-        # Parse dates
+        # Convert date columns
         if date_columns:
             for col in date_columns:
                 if col in df.columns:
-                    df[col] = pd.to_datetime(df[col], errors='coerce')
-        logging.info('Dates parsed')
+                    df[col] = pd.to_datetime(df[col])
         
         # Process in batches
-        total_inserted, total_skipped, total_rows = ingest_data(df, model_class, batch_size, skip_rows)
+        for i in range(0, len(df), batch_size):
+            batch = df.iloc[i:i + batch_size]
+            batch_records = 0
+            batch_errors = 0
+            batch_skipped = 0
+            
+            for _, row in batch.iterrows():
+                try:
+                    # Convert row to dict and handle NaN values
+                    data = {k: (None if pd.isna(v) else v) for k, v in row.items()}
+                    
+                    # Handle connection_id field for Connection model
+                    if model_class == Connection and 'connection_id' in data:
+                        data['url'] = data.pop('connection_id')
+                    
+                    # Remove conversation_id from Message data
+                    if model_class == Message and 'conversation_id' in data:
+                        data.pop('conversation_id')
+                    
+                    # For Message model, only keep the fields we need
+                    if model_class == Message:
+                        required_fields = ['message_id', 'sender', 'recipient', 'message_date', 'subject', 'content']
+                        data = {k: v for k, v in data.items() if k in required_fields}
+                    # For Like model, only keep the fields we need
+                    elif model_class == Like:
+                        required_fields = ['date', 'type', 'link']
+                        data = {k: v for k, v in data.items() if k in required_fields}
+                    # For Comment model, only keep the fields we need
+                    elif model_class == Comment:
+                        required_fields = ['date', 'message', 'comment_id']
+                        data = {k: v for k, v in data.items() if k in required_fields}
+                    # For Post model, only keep the fields we need
+                    elif model_class == Post:
+                        required_fields = ['date', 'post_link', 'post_commentary', 'visibility']
+                        data = {k: v for k, v in data.items() if k in required_fields}
+                    
+                    # Add temporal columns if they don't exist
+                    if 'date' in data and data['date'] is not None:
+                        date = pd.to_datetime(data['date'])
+                        data['year'] = date.year
+                        data['month'] = date.month
+                        data['year_month'] = f"{date.year}-{date.month:02d}"
+                    
+                    # Add timestamps
+                    now = datetime.now(timezone.utc)
+                    data['created_at'] = now
+                    data['updated_at'] = now
+                    data['deleted_at'] = None
+                    
+                    # Check if record already exists
+                    existing = None
+                    if model_class == Like and 'link' in data:
+                        existing = session.query(model_class).filter_by(link=data['link']).first()
+                    elif model_class == Comment and 'comment_id' in data:
+                        existing = session.query(model_class).filter_by(comment_id=data['comment_id']).first()
+                    elif model_class == Message and 'message_id' in data:
+                        existing = session.query(model_class).filter_by(message_id=data['message_id']).first()
+                    elif model_class == Connection and 'url' in data:
+                        existing = session.query(model_class).filter_by(url=data['url']).first()
+                    elif model_class == Post and 'post_link' in data:
+                        existing = session.query(model_class).filter_by(post_link=data['post_link']).first()
+                    
+                    if existing:
+                        # Skip existing record
+                        batch_skipped += 1
+                        continue
+                    
+                    # Create new record
+                    obj = model_class(**data)
+                    session.add(obj)
+                    batch_records += 1
+                    
+                except Exception as e:
+                    logging.error(f"Error processing row: {str(e)}")
+                    logging.error(f"Data that caused error: {data}")
+                    batch_errors += 1
+                    continue
+            
+            try:
+                session.commit()
+                total_records += batch_records
+                total_errors += batch_errors
+                total_skipped += batch_skipped
+                
+                # Log batch progress
+                batch_time = time.time() - batch_time
+                logging.info(f"Processed batch of {batch_size} records in {batch_time:.2f} seconds")
+                logging.info(f"Records added: {batch_records}, Errors: {batch_errors}, Skipped: {batch_skipped}")
+                batch_time = time.time()
+                
+            except Exception as e:
+                session.rollback()
+                logging.error(f"Error committing batch: {str(e)}")
+                total_errors += batch_size - batch_records - batch_skipped
         
-        # Log final summary
-        end_time = datetime.now(UTC)
-        duration = end_time - batch_time
-        logging.info(f'=== {model_class.__tablename__.title()} Ingestion Complete ===')
-        logging.info(f'Total time: {duration}')
-        logging.info(f'Total rows processed: {total_rows}')
-        logging.info(f'Total new records: {total_inserted}')
-        logging.info(f'Total skipped: {total_skipped}')
-        logging.info(f'Success rate: {(total_inserted + total_skipped) / total_rows * 100:.2f}%')
-        
-        return True
+        logging.info(f"Finished processing {file_path}")
+        logging.info(f"Total records added: {total_records}")
+        logging.info(f"Total errors: {total_errors}")
+        logging.info(f"Total skipped: {total_skipped}")
         
     except Exception as e:
-        logging.error(f'Error processing {model_class.__tablename__}: {e}')
-        return False
+        logging.error(f"Error processing dataset {file_path}: {str(e)}")
+        raise
+    finally:
+        session.close()
 
 def main():
     parser = argparse.ArgumentParser(description='Ingest LinkedIn connections and messages into database')
@@ -524,28 +470,49 @@ def main():
         'messages': {
             'file': 'messages_cleaned.csv',
             'model': Message,
-            'column_mapping': {},
+            'column_mapping': {
+                'message_id': 'message_id',
+                'sender': 'sender',
+                'recipient': 'recipient',
+                'message_date': 'message_date',
+                'subject': 'subject',
+                'content': 'content'
+            },
             'date_columns': ['message_date'],
             'skip_rows': 0
         },
         'likes': {
             'file': 'Reactions_cleaned.csv',
             'model': Like,
-            'column_mapping': {},
+            'column_mapping': {
+                'Date': 'date',
+                'Type': 'type',
+                'Link': 'link'
+            },
             'date_columns': ['date'],
             'skip_rows': 0
         },
         'comments': {
             'file': 'Comments_cleaned.csv',
             'model': Comment,
-            'column_mapping': {},
+            'column_mapping': {
+                'Date': 'date',
+                'Message': 'message',
+                'comment_id': 'comment_id',
+                'Link': 'link'
+            },
             'date_columns': ['date'],
             'skip_rows': 0
         },
         'posts': {
             'file': 'Shares.csv',  # Keep original filename for input
             'model': Post,
-            'column_mapping': {},
+            'column_mapping': {
+                'Date': 'date',
+                'ShareLink': 'post_link',
+                'ShareCommentary': 'post_commentary',
+                'Visibility': 'visibility'
+            },
             'date_columns': ['date'],
             'skip_rows': 0
         }

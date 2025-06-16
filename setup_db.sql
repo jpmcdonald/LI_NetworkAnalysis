@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS connections (
 -- Create messages table
 CREATE TABLE IF NOT EXISTS messages (
     id SERIAL PRIMARY KEY,
-    conversation_id VARCHAR(100),
+    message_id VARCHAR(100) UNIQUE,
     sender VARCHAR(200),
     recipient TEXT,
     message_date TIMESTAMP,
@@ -40,8 +40,8 @@ CREATE TABLE IF NOT EXISTS messages (
 -- Create comments table
 CREATE TABLE IF NOT EXISTS comments (
     id SERIAL PRIMARY KEY,
+    comment_id VARCHAR(100) UNIQUE,
     date TIMESTAMP,
-    link VARCHAR(300),
     message TEXT,
     year INTEGER,
     month INTEGER,
@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS comments (
 CREATE TABLE IF NOT EXISTS posts (
     id SERIAL PRIMARY KEY,
     date TIMESTAMP,
-    post_link VARCHAR(300),
+    post_link VARCHAR(300) UNIQUE,
     post_commentary TEXT,
     visibility VARCHAR(50),
     year INTEGER,
@@ -71,7 +71,7 @@ CREATE TABLE IF NOT EXISTS likes (
     id SERIAL PRIMARY KEY,
     date TIMESTAMP,
     type VARCHAR(50),
-    link VARCHAR(300),
+    link VARCHAR(300) UNIQUE,
     year INTEGER,
     month INTEGER,
     year_month VARCHAR(7),
@@ -79,7 +79,6 @@ CREATE TABLE IF NOT EXISTS likes (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     deleted_at TIMESTAMP
 );
-
 
 -- Create indexes for connections table
 CREATE INDEX IF NOT EXISTS idx_connections_company ON connections(company);
@@ -89,14 +88,14 @@ CREATE INDEX IF NOT EXISTS idx_connections_email_address ON connections(email_ad
 CREATE INDEX IF NOT EXISTS idx_connections_deleted_at ON connections(deleted_at);
 
 -- Create indexes for messages table
-CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_messages_message_id ON messages(message_id);
 CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender);
 CREATE INDEX IF NOT EXISTS idx_messages_message_date ON messages(message_date);
 CREATE INDEX IF NOT EXISTS idx_messages_deleted_at ON messages(deleted_at);
 
 -- Create indexes for comments table
+CREATE INDEX IF NOT EXISTS idx_comments_comment_id ON comments(comment_id);
 CREATE INDEX IF NOT EXISTS idx_comments_date ON comments(date);
-CREATE INDEX IF NOT EXISTS idx_comments_link ON comments(link);
 CREATE INDEX IF NOT EXISTS idx_comments_deleted_at ON comments(deleted_at);
 
 -- Create indexes for posts table
